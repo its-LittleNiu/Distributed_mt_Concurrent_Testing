@@ -63,6 +63,48 @@ For models with 8k context limits, add:
 --server-max-tokens 8192 --prompt-token-reserve 128 --prompt-budget-ratio 0.6
 ```
 
+## Request rate control
+
+`--request-rate` is an actual HTTP request start-rate limiter.
+
+It is not only a display field in the summary.
+
+For example:
+
+```bash
+--request-rate 4
+```
+
+This means one Locust process starts about 4 HTTP requests per second.
+
+The limiter is applied immediately before `POST /v1/chat/completions`.
+
+Prompt construction, local prompt clipping, and local rejection are not counted as request latency.
+
+Therefore, TTFT and E2E latency still start from the real HTTP POST time.
+
+Use this pattern to test layered pressure:
+
+```bash
+python scripts/run_locust_matrix.py \
+  --host http://10.10.240.13:8000 \
+  --concurrencies "16,32,64,96,128" \
+  --request-rates "1,2,4" \
+  --run-time 5m \
+  --dataset ./ShareGPT_V3_unfiltered_cleaned_split.json \
+  --input-output "[4000:1000],[6000:1000]" \
+  --model DeepSeek-R1-0528 \
+  --tokenizer-path ./tokenizer_only \
+  --summary-csv results/summary.csv \
+  --server-max-tokens 8192 \
+  --prompt-token-reserve 512 \
+  --prompt-budget-ratio 1.0
+```
+
+Use `--request-rate 0` or a negative value to disable request-rate limiting and let Locust send requests as fast as possible.
+
+Note: when using `--processes N`, each Locust process applies its own `--request-rate`. The total request start rate is approximately `request_rate * N`.
+
 ## True distributed mode (multi-machine)
 
 Master node:
