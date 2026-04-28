@@ -9,6 +9,8 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
+import gevent
+from gevent.lock import Semaphore
 from locust import HttpUser, events, task
 
 from bench.dataset import PromptProvider
@@ -26,6 +28,42 @@ resolved_tokenizer = None
 cpu_bottleneck_detected = False
 _cpu_monitor_stop = threading.Event()
 _cpu_monitor_thread: Optional[threading.Thread] = None
+
+
+class RequestRateLimiter:
+    """Process-wide request start rate limiter.
+
+    Locust's -r option controls user spawn rate, not HTTP request rate.
+    This limiter spaces actual HTTP request starts according to --request-rate.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Semaphore()
+        self._rate_per_s = 0.0
+        self._next_start_at = 0.0
+
+    def reset(self, rate_per_s: float) -> None:
+        with self._lock:
+            self._rate_per_s = max(0.0, float(rate_per_s or 0.0))
+            self._next_start_at = time.perf_counter()
+
+    def wait(self) -> None:
+        with self._lock:
+            rate_per_s = self._rate_per_s
+            if rate_per_s <= 0:
+                return
+
+            interval_s = 1.0 / rate_per_s
+            now = time.perf_counter()
+            scheduled_start = max(now, self._next_start_at)
+            self._next_start_at = scheduled_start + interval_s
+            sleep_s = scheduled_start - now
+
+        if sleep_s > 0:
+            gevent.sleep(sleep_s)
+
+
+request_rate_limiter = RequestRateLimiter()
 
 
 def _start_cpu_monitor() -> None:
@@ -119,7 +157,12 @@ def _(parser):
         default=0.6,
         help="Conservative ratio applied to prompt budget due to tokenizer mismatch",
     )
-    parser.add_argument("--request-rate", type=float, default=1.0, help="Target request rate")
+    parser.add_argument(
+        "--request-rate",
+        type=float,
+        default=1.0,
+        help="Target HTTP request start rate per Locust process. Use <=0 for unlimited.",
+    )
     parser.add_argument(
         "--summary-csv",
         type=str,
@@ -168,6 +211,13 @@ def _(environment, **kwargs):
                 "Tokenizer load failed in strict shaping mode. "
                 f"source={tokenizer_source}, auto_err={exc}, fast_err={exc2}"
             )
+
+    request_rate_limiter.reset(float(opts.request_rate))
+    if float(opts.request_rate) > 0:
+        print(f"[bench] request rate limiter enabled: {float(opts.request_rate):.4f} req/s")
+    else:
+        print("[bench] request rate limiter disabled: unlimited request start rate")
+
     _start_cpu_monitor()
 
 
@@ -211,7 +261,7 @@ def _(environment, **kwargs):
 
 
 class TRTLLMUser(HttpUser):
-    # 无思考时间：请求结束后立即发起下一次请求，最大化压力。
+    # 无思考时间。真实请求启动速率由 RequestRateLimiter 控制。
     wait_time = lambda self: 0  # noqa: E731
 
     @staticmethod
@@ -288,7 +338,6 @@ class TRTLLMUser(HttpUser):
         ids = resolved_tokenizer.encode(joined, add_special_tokens=True)
         return len(ids) + 256
 
-    
     @task
     def chat_completion_stream(self):
         # 每个虚拟用户会反复执行的核心请求路径。
@@ -447,6 +496,9 @@ class TRTLLMUser(HttpUser):
         if resolved_model:
             payload["model"] = resolved_model
 
+        # 4) 真正的请求速率控制点。等待结束后才开始记录 TTFT/E2E。
+        request_rate_limiter.wait()
+
         start = time.perf_counter()
         first_token_at = None
         output_fragments = []
@@ -492,7 +544,7 @@ class TRTLLMUser(HttpUser):
                     return
 
                 try:
-                    # 4) 解析 SSE 流，并记录首 token 到达时间。
+                    # 5) 解析 SSE 流，并记录首 token 到达时间。
                     for raw in response.iter_lines():
                         if not raw:
                             continue
@@ -538,7 +590,7 @@ class TRTLLMUser(HttpUser):
         finally:
             metrics.register_request_end()
 
-        # 5) 将流式结果转换为基准指标并写入指标收集器。
+        # 6) 将流式结果转换为基准指标并写入指标收集器。
         end = time.perf_counter()
         ttft = (first_token_at - start) if first_token_at else 0.0
         latency = end - start
