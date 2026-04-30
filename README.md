@@ -36,7 +36,7 @@ pip install -r requirements.txt
 Single run:
 
 ```bash
-python -m locust -f locustfile.py --headless --host http://10.10.240.13:8000 -u 16 -r 16 --run-time 3m --only-summary --dataset ./ShareGPT_V3_unfiltered_cleaned_split.json --input-output "[4000:1000],[6000:1000]" --request-rate 2 --summary-csv results/summary.csv
+python -m locust -f locustfile.py --headless --host http://host:8000 -u 16 -r 16 --run-time 3m --only-summary --dataset ./ShareGPT_V3_unfiltered_cleaned_split.json --input-output "[4000:1000],[6000:1000]" --request-rate 2 --summary-csv results/summary.csv
 ```
 
 If your server requires explicit model id (common), add:
@@ -54,7 +54,7 @@ For accurate prompt clipping, add tokenizer source (recommended):
 Matrix run (similar to your SGLang benchmark style):
 
 ```bash
-python scripts/run_locust_matrix.py --host http://10.10.240.13:8000 --concurrencies "16,32,64,96,128" --request-rates "1" --run-time 5m --dataset ./ShareGPT_V3_unfiltered_cleaned_split.json --input-output "[4000:1000],[6000:1000]" --model <your_model_id> --tokenizer-path <hf_repo_or_local_path> --summary-csv results/summary.csv
+python scripts/run_locust_matrix.py --host http://host:8000 --concurrencies "16,32,64,96,128" --request-rates "1" --run-time 5m --dataset ./ShareGPT_V3_unfiltered_cleaned_split.json --input-output "[4000:1000],[6000:1000]" --model <your_model_id> --tokenizer-path <hf_repo_or_local_path> --summary-csv results/summary.csv
 ```
 
 For models with 8k context limits, add:
@@ -87,7 +87,7 @@ Use this pattern to test layered pressure:
 
 ```bash
 python scripts/run_locust_matrix.py \
-  --host http://10.10.240.13:8000 \
+  --host http://host:8000 \
   --concurrencies "16,32,64,96,128" \
   --request-rates "1,2,4" \
   --run-time 5m \
@@ -110,7 +110,7 @@ Note: when using `--processes N`, each Locust process applies its own `--request
 Master node:
 
 ```bash
-locust -f locustfile.py --master --host http://10.10.240.13:8000
+locust -f locustfile.py --master --host http://host:8000
 ```
 
 Worker node(s):
