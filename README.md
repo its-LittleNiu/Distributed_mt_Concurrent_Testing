@@ -1,10 +1,10 @@
-# Locust Distributed Concurrent Benchmark for TRT-LLM
+# 基于 Locust 的 TRT-LLM 分布式并发压测工具
 
-This project provides an enterprise-style load test baseline for disaggregated TRT-LLM OpenAI-compatible serving.
+本项目提供一套偏企业交付场景的压测基线。主要用于测试 TRT-LLM OpenAI 兼容服务，尤其适合 Prefill/Decode 分离部署后的接口压测。
 
-## What it measures
+## 测试指标
 
-For each run, the script exports these KPI columns into `results/summary.csv`:
+每次运行后，脚本会将以下 KPI 字段写入 `results/summary.csv`：
 
 - `concurrency`
 - `request_rate`
@@ -18,72 +18,72 @@ For each run, the script exports these KPI columns into `results/summary.csv`:
 - `total_tokens_per_s`
 - `client_cpu_bottleneck`
 
-## Project layout
+## 项目结构
 
-- `locustfile.py`: Locust user behavior and stream metrics collection
-- `bench/dataset.py`: ShareGPT-like dataset loader and prompt shaper
-- `bench/metrics.py`: In-memory collector and CSV summary writer
-- `scripts/run_locust_matrix.py`: run concurrency/rate matrix automatically
+- `locustfile.py`：定义 Locust 用户行为，并采集流式响应指标。
+- `bench/dataset.py`：加载 ShareGPT 类数据集，并按目标输入长度构造 prompt。
+- `bench/metrics.py`：内存指标收集器，并负责生成 CSV 汇总文件。
+- `scripts/run_locust_matrix.py`：自动执行并发数和请求速率矩阵测试。
 
-## Quick start
+## 快速开始
 
-Install:
+安装依赖：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Single run:
+单轮压测：
 
 ```bash
 python -m locust -f locustfile.py --headless --host http://host:8000 -u 16 -r 16 --run-time 3m --only-summary --dataset ./ShareGPT_V3_unfiltered_cleaned_split.json --input-output "[4000:1000],[6000:1000]" --request-rate 2 --summary-csv results/summary.csv
 ```
 
-If your server requires explicit model id (common), add:
+如果服务端需要显式指定模型 ID，可以增加：
 
 ```bash
 --model <your_model_id>
 ```
 
-For accurate prompt clipping, add tokenizer source (recommended):
+为了更准确地裁剪 prompt，建议增加 tokenizer 路径：
 
 ```bash
 --tokenizer-path <hf_repo_or_local_path>
 ```
 
-Matrix run (similar to your SGLang benchmark style):
+矩阵压测，形式接近 SGLang benchmark 的使用方式：
 
 ```bash
 python scripts/run_locust_matrix.py --host http://host:8000 --concurrencies "16,32,64,96,128" --request-rates "1" --run-time 5m --dataset ./ShareGPT_V3_unfiltered_cleaned_split.json --input-output "[4000:1000],[6000:1000]" --model <your_model_id> --tokenizer-path <hf_repo_or_local_path> --summary-csv results/summary.csv
 ```
 
-For models with 8k context limits, add:
+对于 8k 上下文限制的模型，可以增加：
 
 ```bash
 --server-max-tokens 8192 --prompt-token-reserve 128 --prompt-budget-ratio 0.6
 ```
 
-## Request rate control
+## 请求速率控制
 
-`--request-rate` is an actual HTTP request start-rate limiter.
+`--request-rate` 是真实的 HTTP 请求启动速率限制器。
 
-It is not only a display field in the summary.
+它不是 summary 里的一个展示字段。
 
-For example:
+例如：
 
 ```bash
 --request-rate 4
 ```
 
-This means one Locust process starts about 4 HTTP requests per second.
+这表示单个 Locust 进程大约每秒启动 4 个 HTTP 请求。
 
-The limiter is applied immediately before `POST /v1/chat/completions`.
+限速逻辑会在 `POST /v1/chat/completions` 之前立即生效。
 
-Prompt construction, local prompt clipping, and local rejection are not counted as request latency.
+prompt 构造、本地 prompt 裁剪、本地拒绝等步骤，不会计入请求延迟。
 
-Therefore, TTFT and E2E latency still start from the real HTTP POST time.
+因此，TTFT 和 E2E latency 仍然从真实 HTTP POST 发起时开始计算。
 
-Use this pattern to test layered pressure:
+可以用下面的方式做分层压力测试：
 
 ```bash
 python scripts/run_locust_matrix.py \
@@ -101,37 +101,37 @@ python scripts/run_locust_matrix.py \
   --prompt-budget-ratio 1.0
 ```
 
-Use `--request-rate 0` or a negative value to disable request-rate limiting and let Locust send requests as fast as possible.
+使用 `--request-rate 0` 或负数，可以关闭请求速率限制。此时 Locust 会尽可能快地发送请求。
 
-Note: when using `--processes N`, each Locust process applies its own `--request-rate`. The total request start rate is approximately `request_rate * N`.
+注意：使用 `--processes N` 时，每个 Locust 进程都会独立应用自己的 `--request-rate`。因此总请求启动速率约等于 `request_rate * N`。
 
-## True distributed mode (multi-machine)
+## 真正的分布式模式，多机器压测
 
-Master node:
+Master 节点：
 
 ```bash
 locust -f locustfile.py --master --host http://host:8000
 ```
 
-Worker node(s):
+Worker 节点：
 
 ```bash
 locust -f locustfile.py --worker --master-host <master_ip>
 ```
 
-For CI-like local process distribution on one machine, use:
+如果只想在一台机器上模拟 CI 类似的多进程分布式压测，可以使用：
 
 ```bash
 python scripts/run_locust_matrix.py --workers 4
 ```
 
-This forwards `--processes 4` to locust.
+该参数会把 `--processes 4` 传递给 Locust。
 
-## Notes
+## 说明
 
-- Token count is estimated by whitespace split for a model-agnostic baseline.
-- If dataset path is missing, benchmark falls back to built-in prompts.
-- Prompt will be clipped by the model tokenizer first (fallback to word split if tokenizer load fails), using a conservative budget:
-  `(server_max_tokens - max_tokens - prompt_token_reserve) * prompt_budget_ratio`.
-- If client CPU usage reaches 90%+ during a run, `client_cpu_bottleneck=true` is written to the summary row.
-- For strict tokenizer-level accounting, replace `estimate_tokens()` in `bench/metrics.py` with your production tokenizer.
+- 默认 token 统计采用空格切分，作为模型无关的基线估算方式。
+- 如果没有提供数据集路径，benchmark 会回退到内置 prompt。
+- prompt 会优先使用模型 tokenizer 进行裁剪。如果 tokenizer 加载失败，则回退到按词切分。裁剪预算为：
+  `(server_max_tokens - max_tokens - prompt_token_reserve) * prompt_budget_ratio`。
+- 如果某轮测试中客户端 CPU 使用率达到 90% 以上，summary 行中会写入 `client_cpu_bottleneck=true`。
+- 如果需要严格的 tokenizer 级 token 统计，可以将 `bench/metrics.py` 中的 `estimate_tokens()` 替换为生产环境使用的 tokenizer。
