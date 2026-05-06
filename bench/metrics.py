@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import statistics
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 
 def _safe_mean(values: List[float]) -> float:
@@ -30,6 +31,171 @@ class RequestMetric:
     finished_at_s: float
 
 
+def _percentile(values: List[float], p: float) -> float:
+    if not values:
+        return 0.0
+    if p <= 0:
+        return min(values)
+    if p >= 100:
+        return max(values)
+    ordered = sorted(values)
+    idx = (len(ordered) - 1) * (p / 100.0)
+    lo = math.floor(idx)
+    hi = math.ceil(idx)
+    if lo == hi:
+        return ordered[lo]
+    weight = idx - lo
+    return ordered[lo] * (1.0 - weight) + ordered[hi] * weight
+
+
+def summarize_request_metrics(
+    items: List[RequestMetric],
+    concurrency: int,
+    request_rate: float,
+    elapsed_s: float,
+    peak_inflight: int,
+) -> dict:
+    elapsed = max(float(elapsed_s or 0.0), 1e-9)
+    ok = [m for m in items if m.success]
+    success_count = len(ok)
+    total = len(items)
+    fail_count = total - success_count
+    input_tokens = sum(m.prompt_tokens for m in ok)
+    avg_target_input_tokens = _safe_mean([float(m.target_input_tokens) for m in ok])
+    avg_user_content_tokens = _safe_mean([float(m.user_content_tokens) for m in ok])
+    avg_final_prompt_tokens = _safe_mean([float(m.final_prompt_tokens) for m in ok])
+    avg_prompt_tokens = _safe_mean([float(m.prompt_tokens) for m in ok])
+    avg_max_tokens = _safe_mean([float(m.max_tokens) for m in ok])
+    avg_server_max_tokens = _safe_mean([float(m.server_max_tokens) for m in ok])
+    output_tokens = sum(m.output_tokens for m in ok)
+    total_tokens = input_tokens + output_tokens
+    ttft_values = [m.ttft_s for m in ok]
+    latency_values = [m.latency_s for m in ok]
+    tpot_values = [m.tpot_s for m in ok]
+
+    peak_output_tokens_per_s = 0.0
+    if ok:
+        first_finished_at = min(m.finished_at_s for m in ok)
+        buckets = {}
+        for m in ok:
+            rel_sec = int(max(0.0, m.finished_at_s - first_finished_at))
+            buckets[rel_sec] = buckets.get(rel_sec, 0) + m.output_tokens
+        peak_output_tokens_per_s = max(buckets.values()) if buckets else 0.0
+
+    avg_concurrency = (sum(latency_values) / elapsed) if latency_values else 0.0
+
+    return {
+        "concurrency": concurrency,
+        "request_rate": request_rate,
+        "input_tokens": input_tokens,
+        "target_input_tokens": round(avg_target_input_tokens, 2),
+        "user_content_tokens": round(avg_user_content_tokens, 2),
+        "final_prompt_tokens": round(avg_final_prompt_tokens, 2),
+        "actual_prompt_tokens": round(avg_final_prompt_tokens, 2),
+        "prompt_tokens": round(avg_prompt_tokens, 2),
+        "max_tokens": round(avg_max_tokens, 2),
+        "server_max_tokens": round(avg_server_max_tokens, 2),
+        "output_tokens": output_tokens,
+        "success_count": success_count,
+        "fail_count": fail_count,
+        "avg_ttft": _safe_mean([m.ttft_s for m in ok]),
+        "avg_tpot": _safe_mean([m.tpot_s for m in ok]),
+        "avg_latency": _safe_mean([m.latency_s for m in ok]),
+        "output_tokens_per_s": output_tokens / elapsed,
+        "total_tokens_per_s": total_tokens / elapsed,
+        "request_throughput": success_count / elapsed,
+        "peak_output_tokens_per_s": peak_output_tokens_per_s,
+        "peak_concurrent_requests": peak_inflight,
+        "avg_concurrency": avg_concurrency,
+        "ttft_p50": _percentile(ttft_values, 50),
+        "ttft_p99": _percentile(ttft_values, 99),
+        "latency_p50": _percentile(latency_values, 50),
+        "latency_p99": _percentile(latency_values, 99),
+        "tpot_p50": _percentile(tpot_values, 50),
+        "tpot_p99": _percentile(tpot_values, 99),
+        "elapsed_s": elapsed,
+    }
+
+
+def write_summary_csv(output_path: str, summary_data: dict) -> Path:
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not output.exists()
+    with open(output, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(summary_data.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(summary_data)
+    return output
+
+
+def load_metrics_snapshot(path: Union[str, Path]) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    metrics = []
+    for raw in data.get("metrics", []):
+        metrics.append(
+            RequestMetric(
+                success=bool(raw.get("success", False)),
+                latency_s=float(raw.get("latency_s", 0.0)),
+                ttft_s=float(raw.get("ttft_s", 0.0)),
+                tpot_s=float(raw.get("tpot_s", 0.0)),
+                target_input_tokens=int(raw.get("target_input_tokens", 0)),
+                user_content_tokens=int(raw.get("user_content_tokens", 0)),
+                final_prompt_tokens=int(raw.get("final_prompt_tokens", 0)),
+                prompt_tokens=int(raw.get("prompt_tokens", 0)),
+                max_tokens=int(raw.get("max_tokens", 0)),
+                server_max_tokens=int(raw.get("server_max_tokens", 0)),
+                output_tokens=int(raw.get("output_tokens", 0)),
+                finished_at_s=float(raw.get("finished_at_s", 0.0)),
+            )
+        )
+
+    data["metrics"] = metrics
+    data["elapsed_s"] = float(data.get("elapsed_s", 0.0))
+    data["started_at"] = float(data.get("started_at", 0.0))
+    data["peak_inflight"] = int(data.get("peak_inflight", 0))
+    return data
+
+
+def summary_from_snapshots(
+    snapshots: List[dict],
+    concurrency: int,
+    request_rate: float,
+) -> dict:
+    all_items: List[RequestMetric] = []
+    started_values = []
+    finished_values = []
+    peak_inflight = 0
+
+    for snapshot in snapshots:
+        items = snapshot.get("metrics", [])
+        all_items.extend(items)
+        started_at = float(snapshot.get("started_at", 0.0) or 0.0)
+        elapsed_s = float(snapshot.get("elapsed_s", 0.0) or 0.0)
+        if started_at > 0:
+            started_values.append(started_at)
+            finished_values.append(started_at + max(elapsed_s, 0.0))
+        peak_inflight += int(snapshot.get("peak_inflight", 0) or 0)
+
+    if started_values and finished_values:
+        elapsed_s = max(max(finished_values) - min(started_values), 1e-9)
+    else:
+        elapsed_s = max(
+            max((float(s.get("elapsed_s", 0.0) or 0.0) for s in snapshots), default=0.0),
+            1e-9,
+        )
+
+    return summarize_request_metrics(
+        items=all_items,
+        concurrency=concurrency,
+        request_rate=request_rate,
+        elapsed_s=elapsed_s,
+        peak_inflight=peak_inflight,
+    )
+
+
 class MetricsCollector:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -37,6 +203,13 @@ class MetricsCollector:
         self._items: List[RequestMetric] = []
         self._inflight = 0
         self._peak_inflight = 0
+
+    def reset(self) -> None:
+        with self._lock:
+            self._started_at = time.time()
+            self._items = []
+            self._inflight = 0
+            self._peak_inflight = 0
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
@@ -59,101 +232,42 @@ class MetricsCollector:
         with self._lock:
             self._inflight = max(0, self._inflight - 1)
 
-    @staticmethod
-    def _percentile(values: List[float], p: float) -> float:
-        if not values:
-            return 0.0
-        if p <= 0:
-            return min(values)
-        if p >= 100:
-            return max(values)
-        ordered = sorted(values)
-        idx = (len(ordered) - 1) * (p / 100.0)
-        lo = math.floor(idx)
-        hi = math.ceil(idx)
-        if lo == hi:
-            return ordered[lo]
-        weight = idx - lo
-        return ordered[lo] * (1.0 - weight) + ordered[hi] * weight
-
-    def summary(self, concurrency: int, request_rate: float) -> dict:
+    def snapshot(self) -> dict:
         with self._lock:
             items = list(self._items)
             peak_inflight = self._peak_inflight
-        elapsed = max(time.time() - self._started_at, 1e-9)
-        ok = [m for m in items if m.success]
-        success_count = len(ok)
-        total = len(items)
-        fail_count = total - success_count
-        input_tokens = sum(m.prompt_tokens for m in ok)
-        avg_target_input_tokens = _safe_mean([float(m.target_input_tokens) for m in ok])
-        avg_user_content_tokens = _safe_mean([float(m.user_content_tokens) for m in ok])
-        avg_final_prompt_tokens = _safe_mean([float(m.final_prompt_tokens) for m in ok])
-        avg_prompt_tokens = _safe_mean([float(m.prompt_tokens) for m in ok])
-        avg_max_tokens = _safe_mean([float(m.max_tokens) for m in ok])
-        avg_server_max_tokens = _safe_mean([float(m.server_max_tokens) for m in ok])
-        output_tokens = sum(m.output_tokens for m in ok)
-        total_tokens = input_tokens + output_tokens
-        ttft_values = [m.ttft_s for m in ok]
-        latency_values = [m.latency_s for m in ok]
-        tpot_values = [m.tpot_s for m in ok]
-
-        peak_output_tokens_per_s = 0.0
-        if ok:
-            buckets = {}
-            for m in ok:
-                rel_sec = int(max(0.0, m.finished_at_s - self._started_at))
-                buckets[rel_sec] = buckets.get(rel_sec, 0) + m.output_tokens
-            peak_output_tokens_per_s = max(buckets.values()) if buckets else 0.0
-
-        avg_concurrency = (sum(latency_values) / elapsed) if latency_values else 0.0
+            started_at = self._started_at
 
         return {
-            "concurrency": concurrency,
-            "request_rate": request_rate,
-            "input_tokens": input_tokens,
-            "target_input_tokens": round(avg_target_input_tokens, 2),
-            "user_content_tokens": round(avg_user_content_tokens, 2),
-            "final_prompt_tokens": round(avg_final_prompt_tokens, 2),
-            "actual_prompt_tokens": round(avg_final_prompt_tokens, 2),
-            "prompt_tokens": round(avg_prompt_tokens, 2),
-            "max_tokens": round(avg_max_tokens, 2),
-            "server_max_tokens": round(avg_server_max_tokens, 2),
-            "output_tokens": output_tokens,
-            "success_count": success_count,
-            "fail_count": fail_count,
-            "avg_ttft": _safe_mean([m.ttft_s for m in ok]),
-            "avg_tpot": _safe_mean([m.tpot_s for m in ok]),
-            "avg_latency": _safe_mean([m.latency_s for m in ok]),
-            "output_tokens_per_s": output_tokens / elapsed,
-            "total_tokens_per_s": total_tokens / elapsed,
-            "request_throughput": success_count / elapsed,
-            "peak_output_tokens_per_s": peak_output_tokens_per_s,
-            "peak_concurrent_requests": peak_inflight,
-            "avg_concurrency": avg_concurrency,
-            "ttft_p50": self._percentile(ttft_values, 50),
-            "ttft_p99": self._percentile(ttft_values, 99),
-            "latency_p50": self._percentile(latency_values, 50),
-            "latency_p99": self._percentile(latency_values, 99),
-            "tpot_p50": self._percentile(tpot_values, 50),
-            "tpot_p99": self._percentile(tpot_values, 99),
-            "elapsed_s": elapsed,
+            "started_at": started_at,
+            "elapsed_s": max(time.time() - started_at, 1e-9),
+            "peak_inflight": peak_inflight,
+            "metrics": [asdict(m) for m in items],
         }
+
+    def write_snapshot_json(self, output_path: Union[str, Path]) -> Path:
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with open(output, "w", encoding="utf-8") as f:
+            json.dump(self.snapshot(), f, ensure_ascii=False)
+        return output
+
+    def summary(self, concurrency: int, request_rate: float) -> dict:
+        snapshot = self.snapshot()
+        return summarize_request_metrics(
+            items=snapshot["metrics"],
+            concurrency=concurrency,
+            request_rate=request_rate,
+            elapsed_s=snapshot["elapsed_s"],
+            peak_inflight=snapshot["peak_inflight"],
+        )
 
     def write_summary_csv(
         self,
         output_path: str,
         summary_data: dict,
     ) -> Path:
-        output = Path(output_path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        write_header = not output.exists()
-        with open(output, "a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(summary_data.keys()))
-            if write_header:
-                writer.writeheader()
-            writer.writerow(summary_data)
-        return output
+        return write_summary_csv(output_path, summary_data)
 
 
 def format_benchmark_report(summary: dict) -> str:
