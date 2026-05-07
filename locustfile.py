@@ -113,6 +113,51 @@ def _stop_cpu_monitor() -> None:
     _cpu_monitor_stop.set()
 
 
+def _bench_init_sync(
+    host: str,
+    dataset: str,
+    input_output: str,
+    model_opt: str,
+    tokenizer_path_opt: str,
+    seed: int,
+) -> tuple[PromptProvider, str, object]:
+    """CPU/IO-heavy init; run in hub threadpool on workers so RPC heartbeats keep flowing."""
+    prompt_provider = PromptProvider(
+        dataset_path=dataset or None,
+        input_output_pairs=input_output,
+        seed=seed,
+    )
+    resolved_model = model_opt or _resolve_model_id(host)
+    if not resolved_model:
+        raise RuntimeError(
+            "model is required. Please pass --model <model_id>, "
+            "or ensure GET /v1/models is available for auto-discovery."
+        )
+    tokenizer_source = tokenizer_path_opt or resolved_model
+    try:
+        from transformers import AutoTokenizer
+
+        resolved_tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_source,
+            trust_remote_code=True,
+            local_files_only=True,
+        )
+        print(f"[bench] tokenizer loaded from: {tokenizer_source}")
+    except Exception as exc:
+        try:
+            from transformers import PreTrainedTokenizerFast
+
+            tokenizer_file = os.path.join(tokenizer_source, "tokenizer.json")
+            resolved_tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_file)
+            print(f"[bench] tokenizer loaded from tokenizer.json: {tokenizer_file}")
+        except Exception as exc2:
+            raise RuntimeError(
+                "Tokenizer load failed in strict shaping mode. "
+                f"source={tokenizer_source}, auto_err={exc}, fast_err={exc2}"
+            )
+    return prompt_provider, resolved_model, resolved_tokenizer
+
+
 def _resolve_model_id(host: str) -> str:
     # 未传 --model 时，从 OpenAI 兼容接口自动发现模型 ID。
     url = f"{host.rstrip('/')}/v1/models"
@@ -203,41 +248,30 @@ def _(environment, **kwargs):
 
     metrics.reset()
     opts = environment.parsed_options
-    prompt_provider = PromptProvider(
-        dataset_path=opts.dataset or None,
-        input_output_pairs=opts.input_output,
-        seed=42,
-    )
-    resolved_model = opts.model or _resolve_model_id(environment.host or "")
-    if not resolved_model:
-        raise RuntimeError(
-            "model is required. Please pass --model <model_id>, "
-            "or ensure GET /v1/models is available for auto-discovery."
-        )
-    tokenizer_source = opts.tokenizer_path or resolved_model
-    try:
-        from transformers import AutoTokenizer
 
-        # 严格模式：只读取本地 tokenizer，避免线上自动拉取导致不一致。
-        resolved_tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_source,
-            trust_remote_code=True,
-            local_files_only=True,
+    if isinstance(environment.runner, WorkerRunner):
+        # Worker 在 handle_message("spawn") 里同步触发 test_start；若在此占用 CPU 解析大 tokenizer，
+        # 会饿死同进程内的心跳 greenlet，Master 误判 missing。放到 hub 线程池执行可避免阻塞 gevent 循环。
+        prompt_provider, resolved_model, resolved_tokenizer = gevent.get_hub().threadpool.apply(
+            _bench_init_sync,
+            (
+                environment.host or "",
+                opts.dataset or "",
+                opts.input_output,
+                opts.model,
+                opts.tokenizer_path or "",
+                42,
+            ),
         )
-        print(f"[bench] tokenizer loaded from: {tokenizer_source}")
-    except Exception as exc:
-        # 严格模式兜底：不依赖模型配置，直接加载 tokenizer.json。
-        try:
-            from transformers import PreTrainedTokenizerFast
-
-            tokenizer_file = os.path.join(tokenizer_source, "tokenizer.json")
-            resolved_tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_file)
-            print(f"[bench] tokenizer loaded from tokenizer.json: {tokenizer_file}")
-        except Exception as exc2:
-            raise RuntimeError(
-                "Tokenizer load failed in strict shaping mode. "
-                f"source={tokenizer_source}, auto_err={exc}, fast_err={exc2}"
-            )
+    else:
+        prompt_provider, resolved_model, resolved_tokenizer = _bench_init_sync(
+            environment.host or "",
+            opts.dataset or "",
+            opts.input_output,
+            opts.model,
+            opts.tokenizer_path or "",
+            42,
+        )
 
     request_rate_limiter.reset(float(opts.request_rate))
     if float(opts.request_rate) > 0:
