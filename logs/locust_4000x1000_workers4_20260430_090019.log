@@ -1,0 +1,26 @@
+[2026-05-06 09:53:18,557] cpu-2/INFO/locust.main: Starting Locust 2.43.4
+[2026-05-06 09:53:18,593] cpu-2/INFO/locust.runners: cpu-2_171623a58d2443c397cf88b52c8841cc (index 0) reported as ready. 1 workers connected.
+[2026-05-06 09:53:18,594] cpu-2/INFO/locust.runners: cpu-2_5ec34faa95534e02af31bfa92cad3588 (index 1) reported as ready. 2 workers connected.
+[2026-05-06 09:53:18,595] cpu-2/INFO/locust.runners: cpu-2_a670d22dc72a4d0488b546e7898f6e72 (index 2) reported as ready. 3 workers connected.
+[2026-05-06 09:53:18,596] cpu-2/INFO/locust.runners: cpu-2_8a19495a3d064465a054e26e5e2e4143 (index 3) reported as ready. 4 workers connected.
+[2026-05-06 09:53:19,585] cpu-2/INFO/locust.main: Run time limit set to 300 seconds
+[2026-05-06 09:53:19,585] cpu-2/INFO/locust.runners: Sending spawn jobs of 16 users at 16.00 spawn rate to 4 ready workers
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[2026-05-06 09:53:26,118] cpu-2/INFO/locust.runners: Spawning is complete and report waittime is expired, but not all reports received from workers: {"TRTLLMUser": 0} (0 total users)
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[2026-05-06 09:53:30,122] cpu-2/INFO/locust.runners: Worker cpu-2_171623a58d2443c397cf88b52c8841cc failed to send heartbeat, setting state to missing.
+[2026-05-06 09:53:30,123] cpu-2/INFO/locust.runners: Worker cpu-2_5ec34faa95534e02af31bfa92cad3588 failed to send heartbeat, setting state to missing.
+[2026-05-06 09:53:30,123] cpu-2/INFO/locust.runners: Worker cpu-2_a670d22dc72a4d0488b546e7898f6e72 failed to send heartbeat, setting state to missing.
+[2026-05-06 09:53:30,124] cpu-2/INFO/locust.runners: Worker cpu-2_8a19495a3d064465a054e26e5e2e4143 failed to send heartbeat, setting state to missing.
+[2026-05-06 09:53:30,124] cpu-2/INFO/locust.runners: The last worker went missing, stopping test.
+[2026-05-06 09:53:30,392] cpu-2/INFO/locust.runners: cpu-2_8a19495a3d064465a054e26e5e2e4143 (index 3) reported that it has stopped
+[2026-05-06 09:53:30,392] cpu-2/INFO/locust.runners: cpu-2_8a19495a3d064465a054e26e5e2e4143 (index 3) reported as ready. 1 workers connected.
+[2026-05-06 09:53:30,400] cpu-2/INFO/locust.runners: cpu-2_a670d22dc72a4d0488b546e7898f6e72 (index 2) reported that it has stopped
+[2026-05-06 09:53:30,400] cpu-2/INFO/locust.runners: cpu-2_a670d22dc72a4d0488b546e7898f6e72 (index 2) reported as ready. 2 workers connected.
+[2026-05-06 09:53:30,439] cpu-2/INFO/locust.runners: cpu-2_171623a58d2443c397cf88b52c8841cc (index 0) reported that it has stopped
+[2026-05-06 09:53:30,439] cpu-2/INFO/locust.runners: cpu-2_171623a58d2443c397cf88b52c8841cc (index 0) reported as ready. 3 workers connected.
+[2026-05-06 09:53:30,447] cpu-2/INFO/locust.runners: cpu-2_5ec34faa95534e02af31bfa92cad3588 (index 1) reported that it has stopped
+[2026-05-06 09:53:30,448] cpu-2/INFO/locust.runners: cpu-2_5ec34faa95534e02af31bfa92cad3588 (index 1) reported as ready. 4 workers connected.

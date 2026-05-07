@@ -1,0 +1,6 @@
+concurrency,request_rate,input_tokens,target_input_tokens,user_content_tokens,final_prompt_tokens,actual_prompt_tokens,prompt_tokens,max_tokens,server_max_tokens,output_tokens,success_count,fail_count,avg_ttft,avg_tpot,avg_latency,output_tokens_per_s,total_tokens_per_s,request_throughput,peak_output_tokens_per_s,peak_concurrent_requests,avg_concurrency,ttft_p50,ttft_p99,latency_p50,latency_p99,tpot_p50,tpot_p99,elapsed_s,host,model,client_cpu_bottleneck
+16,1.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,11.917320728302002,http://10.10.240.13:8000,DeepSeek-R1-0528,false
+16,1.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,12.074551820755005,http://10.10.240.13:8000,DeepSeek-R1-0528,false
+16,1.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,12.254257678985596,http://10.10.240.13:8000,DeepSeek-R1-0528,false
+16,1.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,12.298741340637207,http://10.10.240.13:8000,DeepSeek-R1-0528,false
+16,1.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,12.3036048412323,http://10.10.240.13:8000,DeepSeek-R1-0528,false
