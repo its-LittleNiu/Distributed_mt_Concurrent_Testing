@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Union
 
 
 def _safe_mean(values: List[float]) -> float:
@@ -29,6 +29,39 @@ class RequestMetric:
     server_max_tokens: int
     output_tokens: int
     finished_at_s: float
+
+
+def request_metric_from_raw(raw: dict) -> RequestMetric:
+    return RequestMetric(
+        success=bool(raw.get("success", False)),
+        latency_s=float(raw.get("latency_s", 0.0)),
+        ttft_s=float(raw.get("ttft_s", 0.0)),
+        tpot_s=float(raw.get("tpot_s", 0.0)),
+        target_input_tokens=int(raw.get("target_input_tokens", 0)),
+        user_content_tokens=int(raw.get("user_content_tokens", 0)),
+        final_prompt_tokens=int(raw.get("final_prompt_tokens", 0)),
+        prompt_tokens=int(raw.get("prompt_tokens", 0)),
+        max_tokens=int(raw.get("max_tokens", 0)),
+        server_max_tokens=int(raw.get("server_max_tokens", 0)),
+        output_tokens=int(raw.get("output_tokens", 0)),
+        finished_at_s=float(raw.get("finished_at_s", 0.0)),
+    )
+
+
+def normalize_metrics_snapshot(data: dict) -> dict:
+    metrics = []
+    for raw in data.get("metrics", []):
+        if isinstance(raw, RequestMetric):
+            metrics.append(raw)
+        else:
+            metrics.append(request_metric_from_raw(raw))
+
+    return {
+        "metrics": metrics,
+        "elapsed_s": float(data.get("elapsed_s", 0.0)),
+        "started_at": float(data.get("started_at", 0.0)),
+        "peak_inflight": int(data.get("peak_inflight", 0)),
+    }
 
 
 def _percentile(values: List[float], p: float) -> float:
@@ -98,9 +131,9 @@ def summarize_request_metrics(
         "output_tokens": output_tokens,
         "success_count": success_count,
         "fail_count": fail_count,
-        "avg_ttft": _safe_mean([m.ttft_s for m in ok]),
-        "avg_tpot": _safe_mean([m.tpot_s for m in ok]),
-        "avg_latency": _safe_mean([m.latency_s for m in ok]),
+        "avg_ttft": _safe_mean(ttft_values),
+        "avg_tpot": _safe_mean(tpot_values),
+        "avg_latency": _safe_mean(latency_values),
         "output_tokens_per_s": output_tokens / elapsed,
         "total_tokens_per_s": total_tokens / elapsed,
         "request_throughput": success_count / elapsed,
@@ -132,31 +165,7 @@ def write_summary_csv(output_path: str, summary_data: dict) -> Path:
 def load_metrics_snapshot(path: Union[str, Path]) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-
-    metrics = []
-    for raw in data.get("metrics", []):
-        metrics.append(
-            RequestMetric(
-                success=bool(raw.get("success", False)),
-                latency_s=float(raw.get("latency_s", 0.0)),
-                ttft_s=float(raw.get("ttft_s", 0.0)),
-                tpot_s=float(raw.get("tpot_s", 0.0)),
-                target_input_tokens=int(raw.get("target_input_tokens", 0)),
-                user_content_tokens=int(raw.get("user_content_tokens", 0)),
-                final_prompt_tokens=int(raw.get("final_prompt_tokens", 0)),
-                prompt_tokens=int(raw.get("prompt_tokens", 0)),
-                max_tokens=int(raw.get("max_tokens", 0)),
-                server_max_tokens=int(raw.get("server_max_tokens", 0)),
-                output_tokens=int(raw.get("output_tokens", 0)),
-                finished_at_s=float(raw.get("finished_at_s", 0.0)),
-            )
-        )
-
-    data["metrics"] = metrics
-    data["elapsed_s"] = float(data.get("elapsed_s", 0.0))
-    data["started_at"] = float(data.get("started_at", 0.0))
-    data["peak_inflight"] = int(data.get("peak_inflight", 0))
-    return data
+    return normalize_metrics_snapshot(data)
 
 
 def summary_from_snapshots(
@@ -169,7 +178,8 @@ def summary_from_snapshots(
     finished_values = []
     peak_inflight = 0
 
-    for snapshot in snapshots:
+    for raw_snapshot in snapshots:
+        snapshot = normalize_metrics_snapshot(raw_snapshot)
         items = snapshot.get("metrics", [])
         all_items.extend(items)
         started_at = float(snapshot.get("started_at", 0.0) or 0.0)
@@ -215,7 +225,6 @@ class MetricsCollector:
     def estimate_tokens(text: str) -> int:
         if not text:
             return 0
-        # Approximation for model-agnostic benchmarking.
         return len(text.split())
 
     def add(self, metric: RequestMetric) -> None:
@@ -231,6 +240,21 @@ class MetricsCollector:
     def register_request_end(self) -> None:
         with self._lock:
             self._inflight = max(0, self._inflight - 1)
+
+    def status(self) -> dict:
+        with self._lock:
+            total = len(self._items)
+            success = sum(1 for item in self._items if item.success)
+            started_at = self._started_at
+            peak_inflight = self._peak_inflight
+
+        return {
+            "total_count": total,
+            "success_count": success,
+            "fail_count": total - success,
+            "elapsed_s": max(time.time() - started_at, 1e-9),
+            "peak_inflight": peak_inflight,
+        }
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -255,7 +279,7 @@ class MetricsCollector:
     def summary(self, concurrency: int, request_rate: float) -> dict:
         snapshot = self.snapshot()
         return summarize_request_metrics(
-            items=snapshot["metrics"],
+            items=normalize_metrics_snapshot(snapshot)["metrics"],
             concurrency=concurrency,
             request_rate=request_rate,
             elapsed_s=snapshot["elapsed_s"],
