@@ -22,7 +22,6 @@ from bench.metrics import (
     merge_worker_payloads_for_summary,
 )
 
-
 metrics = MetricsCollector()
 # 在 test_start 阶段初始化：为每次用户任务提供采样提示词。
 prompt_provider: Optional[PromptProvider] = None
@@ -36,12 +35,35 @@ _cpu_monitor_stop = threading.Event()
 _cpu_monitor_thread: Optional[threading.Thread] = None
 
 _pending_worker_payloads_lock = threading.Lock()
-_pending_worker_payloads: list[dict] = []
+_pending_worker_payloads_by_id: dict[str, dict] = {}
+_pending_worker_payloads_unkeyed: list[dict] = []
 
 
 def _recv_worker_bench_metrics(environment, msg, **kwargs):
+    worker_id = (
+        getattr(msg, "node_id", None)
+        or getattr(msg, "client_id", None)
+        or msg.data.get("_worker_id")
+    )
     with _pending_worker_payloads_lock:
-        _pending_worker_payloads.append(msg.data)
+        if worker_id:
+            _pending_worker_payloads_by_id[str(worker_id)] = msg.data
+        else:
+            _pending_worker_payloads_unkeyed.append(msg.data)
+
+
+@events.report_to_master.add_listener
+def _(client_id, data, **kwargs):
+    data["trtllm_bench_metrics"] = metrics.export_worker_payload(cpu_bottleneck_detected)
+
+
+@events.worker_report.add_listener
+def _(client_id, data, **kwargs):
+    payload = data.get("trtllm_bench_metrics")
+    if not payload:
+        return
+    with _pending_worker_payloads_lock:
+        _pending_worker_payloads_by_id[str(client_id)] = payload
 
 
 @events.init.add_listener
@@ -243,7 +265,8 @@ def _(environment, **kwargs):
     if isinstance(environment.runner, MasterRunner):
         # Master 不跑 HttpUser；跳过 tokenizer/数据集，减轻 RPC 与心跳压力。
         with _pending_worker_payloads_lock:
-            _pending_worker_payloads.clear()
+            _pending_worker_payloads_by_id.clear()
+            _pending_worker_payloads_unkeyed.clear()
         return
 
     metrics.reset()
@@ -290,9 +313,11 @@ def _(environment, **kwargs):
     if isinstance(environment.runner, WorkerRunner):
         _stop_cpu_monitor()
         try:
+            payload = metrics.export_worker_payload(cpu_bottleneck_detected)
+            payload["_worker_id"] = getattr(environment.runner, "client_id", "")
             environment.runner.send_message(
                 "trtllm_bench_metrics",
-                metrics.export_worker_payload(cpu_bottleneck_detected),
+                payload,
             )
         except Exception as exc:
             print(f"[bench] warning: failed to send metrics to master: {exc}")
@@ -308,10 +333,12 @@ def _(environment, **kwargs):
 
     if isinstance(environment.runner, MasterRunner):
         _stop_cpu_monitor()
-        gevent.sleep(0.25)
+        gevent.sleep(1.0)
         with _pending_worker_payloads_lock:
-            payloads = list(_pending_worker_payloads)
-            _pending_worker_payloads.clear()
+            keyed_payloads = list(_pending_worker_payloads_by_id.values())
+            payloads = keyed_payloads or list(_pending_worker_payloads_unkeyed)
+            _pending_worker_payloads_by_id.clear()
+            _pending_worker_payloads_unkeyed.clear()
         proc_n = int(getattr(opts, "processes", 0) or 0)
         if proc_n and len(payloads) < proc_n:
             print(
