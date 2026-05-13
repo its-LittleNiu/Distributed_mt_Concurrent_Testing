@@ -256,6 +256,12 @@ def _(parser):
         default="results/summary.csv",
         help="Summary csv file path",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for dataset sampling",
+    )
 
 
 @events.test_start.add_listener
@@ -283,7 +289,7 @@ def _(environment, **kwargs):
                 opts.input_output,
                 opts.model,
                 opts.tokenizer_path or "",
-                42,
+                int(opts.seed),
             ),
         )
     else:
@@ -293,8 +299,10 @@ def _(environment, **kwargs):
             opts.input_output,
             opts.model,
             opts.tokenizer_path or "",
-            42,
+            int(opts.seed),
         )
+
+    metrics.tokenizer = resolved_tokenizer
 
     request_rate_limiter.reset(float(opts.request_rate))
     if float(opts.request_rate) > 0:
@@ -333,13 +341,20 @@ def _(environment, **kwargs):
 
     if isinstance(environment.runner, MasterRunner):
         _stop_cpu_monitor()
-        gevent.sleep(1.0)
+        proc_n = int(getattr(opts, "processes", 0) or 0)
+        if proc_n > 0:
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline:
+                with _pending_worker_payloads_lock:
+                    received = len(_pending_worker_payloads_by_id)
+                if received >= proc_n:
+                    break
+                gevent.sleep(0.5)
         with _pending_worker_payloads_lock:
             keyed_payloads = list(_pending_worker_payloads_by_id.values())
             payloads = keyed_payloads or list(_pending_worker_payloads_unkeyed)
             _pending_worker_payloads_by_id.clear()
             _pending_worker_payloads_unkeyed.clear()
-        proc_n = int(getattr(opts, "processes", 0) or 0)
         if proc_n and len(payloads) < proc_n:
             print(
                 f"[bench] warning: merged metrics from {len(payloads)}/{proc_n} workers "
@@ -739,7 +754,7 @@ class TRTLLMUser(HttpUser):
         output_tokens = metrics.estimate_tokens(output_text)
         if output_tokens <= 0 and chunks_count > 0:
             output_tokens = chunks_count
-        tpot = (latency - ttft) / max(output_tokens - 1, 1) if output_tokens > 0 else 0.0
+        tpot = ((latency - ttft) / (output_tokens - 1)) if output_tokens > 1 else None
 
         metrics.add(
             RequestMetric(

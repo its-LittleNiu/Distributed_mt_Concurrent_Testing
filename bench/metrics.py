@@ -20,7 +20,7 @@ class RequestMetric:
     success: bool
     latency_s: float
     ttft_s: float
-    tpot_s: float
+    tpot_s: Optional[float]
     target_input_tokens: int
     user_content_tokens: int
     final_prompt_tokens: int
@@ -38,6 +38,7 @@ class MetricsCollector:
         self._items: List[RequestMetric] = []
         self._inflight = 0
         self._peak_inflight = 0
+        self.tokenizer = None
 
     def reset(self) -> None:
         with self._lock:
@@ -46,10 +47,11 @@ class MetricsCollector:
             self._inflight = 0
             self._peak_inflight = 0
 
-    @staticmethod
-    def estimate_tokens(text: str) -> int:
+    def estimate_tokens(self, text: str) -> int:
         if not text:
             return 0
+        if self.tokenizer is not None:
+            return len(self.tokenizer.encode(text, add_special_tokens=False))
         # Approximation for model-agnostic benchmarking.
         return len(text.split())
 
@@ -104,7 +106,7 @@ class MetricsCollector:
         total_tokens = input_tokens + output_tokens
         ttft_values = [m.ttft_s for m in ok]
         latency_values = [m.latency_s for m in ok]
-        tpot_values = [m.tpot_s for m in ok]
+        tpot_values = [float(m.tpot_s) for m in ok if m.tpot_s is not None]
 
         peak_output_tokens_per_s = 0.0
         if ok:
@@ -131,7 +133,7 @@ class MetricsCollector:
             "success_count": success_count,
             "fail_count": fail_count,
             "avg_ttft": _safe_mean([m.ttft_s for m in ok]),
-            "avg_tpot": _safe_mean([m.tpot_s for m in ok]),
+            "avg_tpot": _safe_mean(tpot_values),
             "avg_latency": _safe_mean([m.latency_s for m in ok]),
             "output_tokens_per_s": output_tokens / elapsed,
             "total_tokens_per_s": total_tokens / elapsed,
@@ -145,6 +147,8 @@ class MetricsCollector:
             "latency_p99": self._percentile(latency_values, 99),
             "tpot_p50": self._percentile(tpot_values, 50),
             "tpot_p99": self._percentile(tpot_values, 99),
+            "tpot_sample_count": len(tpot_values),
+            "tpot_skipped_count": success_count - len(tpot_values),
             "elapsed_s": elapsed,
         }
 

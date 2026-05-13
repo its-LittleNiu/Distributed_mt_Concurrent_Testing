@@ -1,5 +1,8 @@
 logs/
 results/
+.idea/
+.vscode/
+venv/
 __pycache__/
 *.pyc
 *.log

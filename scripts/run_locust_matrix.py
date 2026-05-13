@@ -18,6 +18,7 @@ def run_once(
     server_max_tokens: int,
     prompt_token_reserve: int,
     prompt_budget_ratio: float,
+    seed: int,
 ) -> int:
     cmd = [
         sys.executable,
@@ -49,6 +50,8 @@ def run_once(
         str(prompt_token_reserve),
         "--prompt-budget-ratio",
         str(prompt_budget_ratio),
+        "--seed",
+        str(seed),
     ]
     if dataset:
         cmd.extend(["--dataset", dataset])
@@ -113,6 +116,7 @@ def main():
         default=0.6,
         help="Conservative ratio applied to prompt budget due to tokenizer mismatch",
     )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for dataset sampling")
     args = parser.parse_args()
     if not args.model:
         raise SystemExit("Missing --model. Please provide model id to avoid HTTP 400.")
@@ -137,6 +141,7 @@ def main():
                 server_max_tokens=args.server_max_tokens,
                 prompt_token_reserve=args.prompt_token_reserve,
                 prompt_budget_ratio=args.prompt_budget_ratio,
+                seed=args.seed,
             )
             if code != 0:
                 print(f"Run failed for users={users}, rate={rate}, exit_code={code}")
